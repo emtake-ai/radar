@@ -193,15 +193,19 @@ class LiveDisplayController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._viewer: HeatmapViewer | None = None
+        self._enabled = False
 
     def set_viewer(self, viewer: HeatmapViewer | None) -> None:
         with self._lock:
             self._viewer = viewer
+            if self._viewer is not None:
+                self._viewer.set_live(self._enabled)
 
     def set_enabled(self, enabled: bool) -> bool:
         with self._lock:
+            self._enabled = enabled
             if self._viewer is None:
-                return False
+                return True
             return self._viewer.set_live(enabled)
 
 
@@ -317,6 +321,7 @@ class OpenCvHeatmapViewer(HeatmapViewer):
         self._camera_window_name = "Camera Live"
         self._radar_window_ready = False
         self._camera_window_ready = False
+        self._reported_failure = False
 
     def set_live(self, enabled: bool) -> bool:
         if self._cv2 is None:
@@ -371,7 +376,14 @@ class OpenCvHeatmapViewer(HeatmapViewer):
                 cv2.imshow(self._camera_window_name, camera_frame)
                 cv2.resizeWindow(self._camera_window_name, camera_frame.shape[1], camera_frame.shape[0])
             cv2.waitKey(1)
-        except Exception:
+        except Exception as exc:
+            if not self._reported_failure:
+                print(
+                    "[live display error] "
+                    f"{exc}. OpenCV GUI needs a desktop display session with DISPLAY or WAYLAND_DISPLAY set.",
+                    file=sys.stderr,
+                )
+                self._reported_failure = True
             self._enabled = False
 
     def close(self) -> None:
@@ -1278,17 +1290,9 @@ class CombinedStatusReporter:
         while not self._stop_event.wait(self._period_s):
             if not self._enabled:
                 continue
-            report_question = (
-                "Summarize the current radar and camera person-monitoring status. "
-                "State whether a person is detected, whether radar and camera agree, "
-                "and mention distance/angle only if radar has them."
-            )
             report_time = datetime.now().strftime("%H:%M:%S")
             status = self._combined_status_store.get()
-            prompt = _build_combined_status_prompt(
-                question=report_question,
-                status_json=status,
-            )
+            prompt = _build_periodic_report_prompt(status)
             response = _query_ollama(self._model, prompt)
             lines = [
                 f"Start LLM Generation: {report_time}",
@@ -1433,6 +1437,14 @@ def _build_combined_status_prompt(question: str, status_json: dict[str, Any]) ->
         f"any_person_detected={str(any_person).lower()}",
         f"fusion_person_status={fusion.get('person_status', 'unknown')}",
     ]
+    if radar_presence and camera_presence:
+        agreement_sentence = "Both radar and camera detect a person."
+    elif radar_presence:
+        agreement_sentence = "Radar detects a person but camera does not."
+    elif camera_presence:
+        agreement_sentence = "Camera detects a person but radar does not."
+    else:
+        agreement_sentence = "No person is currently detected."
     return (
         "You are assisting with a fused radar and camera person monitoring console.\n"
         "Use the combined status JSON to answer the user's question.\n"
@@ -1440,6 +1452,7 @@ def _build_combined_status_prompt(question: str, status_json: dict[str, Any]) ->
         "- If it is casual conversation, greeting, social talk, or a non-sensor-related request, answer naturally and ignore the sensor values.\n"
         "- Only use radar/camera/sensor values when the user is explicitly asking about presence, person detection, distance, angle, energy, camera, radar, monitoring status, or related sensor observations.\n"
         "- Do not force sensor information into casual conversation.\n"
+        "- Never reveal your classification, reasoning, analysis, or decision process.\n"
         "You must follow the boolean status strictly.\n"
         "Decision rules:\n"
         "- If any_person_detected=true, you must say that a person is currently detected.\n"
@@ -1457,9 +1470,57 @@ def _build_combined_status_prompt(question: str, status_json: dict[str, Any]) ->
         "For energy questions, answer with: The radar detection energy score is X.\n"
         "If the data is uncertain, say so explicitly.\n"
         "Keep the answer concise and directly useful.\n\n"
+        f"Required presence/agreement sentence for sensor-related questions:\n{agreement_sentence}\n\n"
+        "For sensor-related questions, start with that exact sentence or a grammatically equivalent sentence "
+        "with the same meaning. Do not include any contradictory sentence anywhere in the answer.\n\n"
         f"Derived decision state:\n{chr(10).join(decision_lines)}\n\n"
         f"Combined status JSON:\n{status_text}\n\n"
         f"User question:\n{question}\n"
+    )
+
+
+def _build_periodic_report_prompt(status_json: dict[str, Any]) -> str:
+    status_text = json.dumps(status_json, ensure_ascii=False)
+    radar = status_json.get("radar", {})
+    camera = status_json.get("camera", {})
+    fusion = status_json.get("fusion", {})
+    radar_presence = bool(radar.get("presence", False))
+    camera_presence = bool(camera.get("person_detected", False))
+    any_person = radar_presence or camera_presence
+    decision_lines = [
+        f"radar_presence={str(radar_presence).lower()}",
+        f"camera_person_detected={str(camera_presence).lower()}",
+        f"any_person_detected={str(any_person).lower()}",
+        f"fusion_person_status={fusion.get('person_status', 'unknown')}",
+    ]
+    if radar_presence and camera_presence:
+        agreement_sentence = "Both radar and camera detect a person."
+    elif radar_presence:
+        agreement_sentence = "Radar detects a person but camera does not."
+    elif camera_presence:
+        agreement_sentence = "Camera detects a person but radar does not."
+    else:
+        agreement_sentence = "No person is currently detected."
+    return (
+        "You are generating an automatic monitoring report for a fused radar and camera system.\n"
+        "This is not a user chat message. Do not classify the input, do not mention categories, "
+        "and do not explain your reasoning.\n"
+        "Write a concise monitoring report using the combined status JSON.\n"
+        "You must follow the boolean status strictly.\n"
+        "Rules:\n"
+        "- If any_person_detected=true, say that a person is currently detected.\n"
+        "- If any_person_detected=false, say that no person is currently detected.\n"
+        "- If both radar and camera detect a person, clearly say both radar and camera detect a person.\n"
+        "- If only radar detects a person, clearly say radar detects a person but camera does not.\n"
+        "- If only camera detects a person, clearly say camera detects a person but radar does not.\n"
+        "- Mention radar distance in meters and angle in degrees only when radar provides them.\n"
+        "- Mention the radar detection energy score only when available.\n"
+        "- Never mention non-person objects.\n"
+        "- Keep the report to 2 sentences maximum.\n\n"
+        f"Required first sentence:\n{agreement_sentence}\n\n"
+        "Use that exact meaning and do not include any contradictory sentence.\n\n"
+        f"Derived decision state:\n{chr(10).join(decision_lines)}\n\n"
+        f"Combined status JSON:\n{status_text}\n"
     )
 
 
