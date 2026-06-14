@@ -87,8 +87,6 @@ Range
 ```text
 Raw IQ Data
     ↓
-Range FFT
-    ↓
 Beamforming
     ↓
 Range-Angle Heatmap
@@ -106,19 +104,8 @@ Presence Estimation
 
 Acquire raw IQ samples from all receive antennas.
 
-## Step 2. Range FFT
 
-Convert ADC samples into range profiles.
-
-```text
-ADC Samples
-    ↓
-Range FFT
-    ↓
-Range Profile
-```
-
-## Step 3. Beamforming
+## Step 2. Beamforming
 
 Apply:
 
@@ -131,7 +118,7 @@ Output:
 Range-Angle Heatmap
 ```
 
-## Step 4. DSP Preprocessing
+## Step 3. DSP Preprocessing
 
 ### Static Clutter Removal
 
@@ -167,7 +154,7 @@ Typical motion band:
 0.1 Hz – 5 Hz
 ```
 
-## Step 5. Target Detection
+## Step 4. Target Detection
 
 Methods:
 
@@ -180,7 +167,7 @@ Output:
 Target Candidates
 ```
 
-## Step 6. Clustering
+## Step 5. Clustering
 
 Group neighboring detections into individual targets.
 
@@ -210,7 +197,7 @@ Person 2
 Person 3
 ```
 
-## Step 7. Presence Estimation
+## Step 6. Presence Estimation
 
 Final output:
 
@@ -224,6 +211,8 @@ Location = (Range, Angle)
 
 # Respiration Detection Pipeline
 
+after Presence Estimation, you should do below
+
 ```text
 IQ Data
     ↓
@@ -231,15 +220,13 @@ Target Selection
     ↓
 Phase Extraction
     ↓
-Phase Unwrapping
-    ↓
-Clutter Removal
-    ↓
 Band-Pass Filter
     ↓
-Interpolation
+Phase Unwrapping
     ↓
 FFT
+    ↓
+Interpolation
     ↓
 Respiration Rate
 ```
@@ -260,8 +247,20 @@ for the target.
 ```math
 Phase = atan2(Q, I)
 ```
+## Step 3. Band-Pass Filtering
 
-## Step 3. Phase Unwrapping
+Respiration frequency range:
+
+```text
+0.1 Hz – 0.5 Hz
+```
+
+Equivalent to:
+
+```text
+6 – 30 breaths/min
+```
+## Step 4. Phase Unwrapping
 
 Radar phase is wrapped within:
 
@@ -278,50 +277,7 @@ Phase Unwrapping
      ↓
 Continuous Phase
 ```
-
-## Step 4. Clutter Removal
-
-Remove:
-
-- Static reflections
-- Environmental drift
-- Slow-varying background noise
-
-Methods:
-
-- Mean subtraction
-- High-pass filtering
-- EMA-based clutter suppression
-
-## Step 5. Band-Pass Filtering
-
-Respiration frequency range:
-
-```text
-0.1 Hz – 0.5 Hz
-```
-
-Equivalent to:
-
-```text
-6 – 30 breaths/min
-```
-
-## Step 6. Interpolation
-
-Increase temporal resolution.
-
-Methods:
-
-- Linear interpolation
-- Cubic spline interpolation
-
-Purpose:
-
-- Improve FFT resolution
-- Improve peak estimation accuracy
-
-## Step 7. FFT Analysis
+## Step 5. FFT Analysis
 
 ```text
 Filtered Signal
@@ -336,8 +292,20 @@ Extract:
 ```text
 Peak Frequency
 ```
+## Step 6. Interpolation
 
-## Step 8. Respiration Rate Estimation
+Increase temporal resolution.
+
+Methods:
+
+- Linear interpolation
+- Cubic spline interpolation
+
+Purpose:
+
+- Improve FFT resolution
+- Improve peak estimation accuracy
+## Step 7. Respiration Rate Estimation
 
 ```math
 Respiration\ Rate = Peak\ Frequency \times 60
@@ -351,30 +319,3 @@ Example:
 
 ---
 
-# Summary
-
-## Presence Detection
-
-```text
-IQ Data
-→ Range FFT
-→ Beamforming
-→ Clutter Removal
-→ Detection
-→ Clustering
-→ Presence Estimation
-```
-
-## Respiration Detection
-
-```text
-IQ Data
-→ Target Selection
-→ Phase Extraction
-→ Phase Unwrapping
-→ Clutter Removal
-→ Band-Pass Filter
-→ Interpolation
-→ FFT
-→ Respiration Rate Estimation
-```
